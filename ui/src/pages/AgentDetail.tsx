@@ -71,6 +71,7 @@ import {
   ArrowLeft,
   HelpCircle,
   FolderOpen,
+  Terminal,
 } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -622,6 +623,7 @@ export function AgentDetail() {
   const { companies, selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { closePanel } = usePanel();
   const { openNewIssue } = useDialog();
+  const { pushToast } = useToast();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -849,6 +851,16 @@ export function AgentDetail() {
     },
   });
 
+  const meetMutation = useMutation({
+    mutationFn: () => agentsApi.meet(agentLookupRef, resolvedCompanyId ?? undefined),
+    onSuccess: () => {
+      pushToast({ title: "Session opened", body: "Interactive terminal session opened", tone: "success" });
+    },
+    onError: (error: Error) => {
+      pushToast({ title: "Failed to open session", body: error.message, tone: "error" });
+    },
+  });
+
   useEffect(() => {
     const crumbs: { label: string; href?: string }[] = [
       { label: "Agents", href: "/agents" },
@@ -922,6 +934,15 @@ export function AgentDetail() {
           </div>
         </div>
         <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => meetMutation.mutate()}
+            disabled={meetMutation.isPending}
+          >
+            <Terminal className="h-3.5 w-3.5 sm:mr-1" />
+            <span className="hidden sm:inline">Meet</span>
+          </Button>
           <Button
             variant="outline"
             size="sm"

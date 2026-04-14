@@ -192,6 +192,8 @@ export const agentsApi = {
     },
     companyId?: string,
   ) => api.post<AgentWakeupResponse>(agentPath(id, companyId, "/wakeup"), data),
+  meet: (id: string, companyId?: string) =>
+    api.post<{ status: string; agentName: string }>(agentPath(id, companyId, "/meet"), {}),
   loginWithClaude: (id: string, companyId?: string) =>
     api.post<ClaudeLoginResult>(agentPath(id, companyId, "/claude-login"), {}),
   availableSkills: () =>
