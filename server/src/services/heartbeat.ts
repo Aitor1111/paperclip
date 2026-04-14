@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
+import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -14,6 +15,8 @@ import {
   heartbeatRuns,
   issueComments,
   issues,
+  issueLabels,
+  labels,
   projects,
   projectWorkspaces,
 } from "@paperclipai/db";
@@ -31,7 +34,7 @@ import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
-import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
+import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir, resolvePaperclipInstanceRoot } from "../home-paths.js";
 import {
   buildHeartbeatRunIssueComment,
   mergeHeartbeatRunResultJson,
@@ -62,6 +65,8 @@ import {
 } from "./execution-workspace-policy.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
+import { resolvePaperclipSkillsDir } from "@paperclipai/adapter-utils/server-utils";
+import { openInteractiveSession } from "../utils/terminal-launcher.js";
 import {
   hasSessionCompactionThresholds,
   resolveSessionCompactionPolicy,
@@ -3281,41 +3286,105 @@ export function heartbeatService(db: Db) {
         });
       };
 
-      const adapter = getServerAdapter(agent.adapterType);
-      const authToken = adapter.supportsLocalAgentJwt
-        ? createLocalAgentJwt(agent.id, agent.companyId, agent.adapterType, run.id)
-        : null;
-      if (adapter.supportsLocalAgentJwt && !authToken) {
-        logger.warn(
-          {
-            companyId: agent.companyId,
-            agentId: agent.id,
-            runId: run.id,
-            adapterType: agent.adapterType,
-          },
-          "local agent jwt secret missing or invalid; running without injected PAPERCLIP_API_KEY",
-        );
+      // --- Meet label interception ---
+      // If the triggering issue has a "meet" label, open an interactive terminal
+      // session instead of running the headless adapter.
+      let hasMeetLabel = false;
+      if (issueId) {
+        const meetLabelRows = await db
+          .select({ name: labels.name })
+          .from(issueLabels)
+          .innerJoin(labels, eq(issueLabels.labelId, labels.id))
+          .where(eq(issueLabels.issueId, issueId));
+        hasMeetLabel = meetLabelRows.some((r) => r.name.toLowerCase() === "meet");
       }
-      const adapterResult = await adapter.execute({
-        runId: run.id,
-        agent,
-        runtime: runtimeForAdapter,
-        config: runtimeConfig,
-        context,
-        onLog,
-        onMeta: onAdapterMeta,
-        onSpawn: async (meta) => {
-          await persistRunProcessMetadata(run.id, {
-            pid: meta.pid,
-            processGroupId:
-              "processGroupId" in meta && typeof meta.processGroupId === "number"
-                ? meta.processGroupId
-                : null,
-            startedAt: meta.startedAt,
-          });
-        },
-        authToken: authToken ?? undefined,
-      });
+
+      let adapterResult: AdapterExecutionResult;
+
+      if (hasMeetLabel) {
+        // Resolve instructions and skills directories (same as the /meet endpoint)
+        const instanceRoot = resolvePaperclipInstanceRoot();
+        const instructionsDir = path.resolve(
+          instanceRoot,
+          "companies",
+          agent.companyId,
+          "agents",
+          agent.id,
+          "instructions",
+        );
+        const requireForAdapter = createRequire(import.meta.url);
+        const adapterServerEntry = requireForAdapter.resolve("@paperclipai/adapter-claude-local/server");
+        const adapterModuleDir = path.dirname(adapterServerEntry);
+        const skillsDir = await resolvePaperclipSkillsDir(adapterModuleDir) ?? adapterModuleDir;
+
+        // Build an initial prompt from the issue title if available
+        const initialPrompt = issueContext?.title
+          ? `Work on: ${issueContext.title}`
+          : undefined;
+
+        const meetResult = await openInteractiveSession({
+          agentName: agent.name,
+          skillsDir,
+          instructionsDir,
+          initialPrompt,
+        });
+
+        if (!meetResult.success) {
+          logger.warn(
+            { runId: run.id, agentId: agent.id, error: meetResult.error },
+            "meet label interception: failed to open interactive session",
+          );
+        }
+
+        // Provide a minimal AdapterExecutionResult so the rest of executeRun can proceed
+        adapterResult = {
+          exitCode: meetResult.success ? 0 : 1,
+          signal: null,
+          timedOut: false,
+          summary: meetResult.success
+            ? "Interactive session opened in terminal"
+            : `Failed to open interactive session: ${meetResult.error ?? "unknown error"}`,
+          usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 },
+          errorMessage: meetResult.success ? null : (meetResult.error ?? "Failed to open interactive session"),
+        };
+      } else {
+        // Normal headless adapter flow
+        const adapter = getServerAdapter(agent.adapterType);
+        const authToken = adapter.supportsLocalAgentJwt
+          ? createLocalAgentJwt(agent.id, agent.companyId, agent.adapterType, run.id)
+          : null;
+        if (adapter.supportsLocalAgentJwt && !authToken) {
+          logger.warn(
+            {
+              companyId: agent.companyId,
+              agentId: agent.id,
+              runId: run.id,
+              adapterType: agent.adapterType,
+            },
+            "local agent jwt secret missing or invalid; running without injected PAPERCLIP_API_KEY",
+          );
+        }
+        adapterResult = await adapter.execute({
+          runId: run.id,
+          agent,
+          runtime: runtimeForAdapter,
+          config: runtimeConfig,
+          context,
+          onLog,
+          onMeta: onAdapterMeta,
+          onSpawn: async (meta) => {
+            await persistRunProcessMetadata(run.id, {
+              pid: meta.pid,
+              processGroupId:
+                "processGroupId" in meta && typeof meta.processGroupId === "number"
+                  ? meta.processGroupId
+                  : null,
+              startedAt: meta.startedAt,
+            });
+          },
+          authToken: authToken ?? undefined,
+        });
+      }
       const adapterManagedRuntimeServices = adapterResult.runtimeServices
         ? await persistAdapterManagedRuntimeServices({
             db,
