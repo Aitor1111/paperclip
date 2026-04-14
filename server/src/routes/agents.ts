@@ -1,5 +1,6 @@
 import { Router, type Request } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
 import { agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
@@ -25,6 +26,7 @@ import {
 } from "@paperclipai/shared";
 import {
   readPaperclipSkillSyncPreference,
+  resolvePaperclipSkillsDir,
   writePaperclipSkillSyncPreference,
 } from "@paperclipai/adapter-utils/server-utils";
 import { trackAgentCreated } from "@paperclipai/shared/telemetry";
@@ -70,6 +72,8 @@ import {
   resolveDefaultAgentInstructionsBundleRole,
 } from "../services/default-agent-instructions.js";
 import { getTelemetryClient } from "../telemetry.js";
+import { resolvePaperclipInstanceRoot } from "../home-paths.js";
+import { openInteractiveSession } from "../utils/terminal-launcher.js";
 
 export function agentRoutes(db: Db) {
   const DEFAULT_INSTRUCTIONS_PATH_KEYS: Record<string, string> = {
@@ -2214,6 +2218,61 @@ export function agentRoutes(db: Db) {
     });
 
     res.json(result);
+  });
+
+  router.post("/agents/:id/meet", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const agent = await svc.getById(id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    assertCompanyAccess(req, agent.companyId);
+
+    // Resolve the agent's managed instructions directory
+    const instructionsDir = path.resolve(
+      resolvePaperclipInstanceRoot(),
+      "companies",
+      agent.companyId,
+      "agents",
+      agent.id,
+      "instructions",
+    );
+
+    // Resolve the adapter skills directory via the claude-local package location
+    const require = createRequire(import.meta.url);
+    const adapterServerEntry = require.resolve("@paperclipai/adapter-claude-local/server");
+    const adapterModuleDir = path.dirname(adapterServerEntry);
+    const skillsDir = await resolvePaperclipSkillsDir(adapterModuleDir) ?? adapterModuleDir;
+
+    // If a taskId is provided without a prompt, build a prompt from the issue
+    let initialPrompt = typeof req.body.prompt === "string" ? req.body.prompt.trim() || undefined : undefined;
+    const taskId = typeof req.body.taskId === "string" ? req.body.taskId.trim() || undefined : undefined;
+
+    if (taskId && !initialPrompt) {
+      const issueSvc = issueService(db);
+      const issue = await issueSvc.getById(taskId);
+      if (issue) {
+        const parts = [issue.title];
+        if (issue.description) parts.push(issue.description);
+        initialPrompt = parts.join("\n\n");
+      }
+    }
+
+    const result = await openInteractiveSession({
+      agentName: agent.name,
+      skillsDir,
+      instructionsDir,
+      initialPrompt,
+    });
+
+    if (!result.success) {
+      res.status(500).json({ status: "error", error: result.error });
+      return;
+    }
+
+    res.json({ status: "opened", agentName: agent.name });
   });
 
   router.get("/companies/:companyId/heartbeat-runs", async (req, res) => {
