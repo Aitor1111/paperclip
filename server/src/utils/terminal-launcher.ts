@@ -1,4 +1,5 @@
 import { exec } from "node:child_process";
+import { existsSync } from "node:fs";
 
 export interface LaunchOptions {
   agentName: string;
@@ -32,8 +33,8 @@ function sanitizeName(value: string): string {
 export function buildClaudeCommand(opts: LaunchOptions): string {
   const parts: string[] = ["claude"];
 
-  parts.push(`--add-dir ${opts.skillsDir}`);
-  parts.push(`--add-dir ${opts.instructionsDir}`);
+  parts.push(`--add-dir "${opts.skillsDir}"`);
+  parts.push(`--add-dir "${opts.instructionsDir}"`);
 
   const safeName = sanitizeName(opts.agentName);
   parts.push(`--name "Meeting: ${safeName}"`);
@@ -69,7 +70,7 @@ export function buildOsascript(
   cwd?: string,
 ): string {
   const safeCommand = escapeForAppleScript(command);
-  const cdPart = cwd ? `cd ${escapeForAppleScript(cwd)} && ` : "";
+  const cdPart = cwd ? `cd "${escapeForAppleScript(cwd)}" && ` : "";
   const fullCommand = `${cdPart}${safeCommand}`;
 
   if (terminal === "iterm2") {
@@ -95,21 +96,13 @@ export function buildOsascript(
 
 /**
  * Detect the preferred terminal application on the current system.
- * Returns "iterm2" if iTerm2 is running, otherwise falls back to "terminal".
+ * Returns "iterm2" if iTerm.app is installed, otherwise falls back to "terminal".
  */
 export async function detectTerminal(): Promise<TerminalApp> {
-  return new Promise((resolve) => {
-    exec(
-      'osascript -e \'tell application "System Events" to (name of processes) contains "iTerm2"\'',
-      (error, stdout) => {
-        if (!error && stdout.trim() === "true") {
-          resolve("iterm2");
-        } else {
-          resolve("terminal");
-        }
-      },
-    );
-  });
+  if (existsSync("/Applications/iTerm.app")) {
+    return "iterm2";
+  }
+  return "terminal";
 }
 
 /**

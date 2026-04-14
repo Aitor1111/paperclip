@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   buildClaudeCommand,
   buildOsascript,
+  detectTerminal,
+  openInteractiveSession,
   type LaunchOptions,
 } from "./terminal-launcher.js";
 
@@ -15,8 +17,8 @@ describe("buildClaudeCommand", () => {
   it("builds a basic command with required options", () => {
     const cmd = buildClaudeCommand(baseOpts);
     expect(cmd).toContain("claude");
-    expect(cmd).toContain("--add-dir /home/user/.paperclip/skills");
-    expect(cmd).toContain("--add-dir /home/user/.paperclip/instructions");
+    expect(cmd).toContain('--add-dir "/home/user/.paperclip/skills"');
+    expect(cmd).toContain('--add-dir "/home/user/.paperclip/instructions"');
     expect(cmd).toContain('--name "Meeting: Alice"');
   });
 
@@ -45,7 +47,7 @@ describe("buildClaudeCommand", () => {
     expect(cmd.endsWith('--name "Meeting: Alice"')).toBe(true);
   });
 
-  it("handles quotes in agent names by escaping them", () => {
+  it("handles quotes in agent names by sanitizing them", () => {
     const cmd = buildClaudeCommand({
       ...baseOpts,
       agentName: 'Bob "The Builder"',
@@ -72,8 +74,8 @@ describe("buildClaudeCommand", () => {
       sessionId: "sess-456",
       initialPrompt: "Start task",
     });
-    expect(cmd).toContain("--add-dir /home/user/.paperclip/skills");
-    expect(cmd).toContain("--add-dir /home/user/.paperclip/instructions");
+    expect(cmd).toContain('--add-dir "/home/user/.paperclip/skills"');
+    expect(cmd).toContain('--add-dir "/home/user/.paperclip/instructions"');
     expect(cmd).toContain('--name "Meeting: Alice"');
     expect(cmd).toContain("--resume sess-456");
     expect(cmd).toContain('"Start task"');
@@ -119,17 +121,41 @@ describe("buildOsascript", () => {
   describe("with cwd", () => {
     it("includes cd command for iterm2 when cwd is provided", () => {
       const script = buildOsascript(testCommand, "iterm2", "/some/dir");
-      expect(script).toContain("cd /some/dir");
+      expect(script).toContain('cd "/some/dir"');
     });
 
     it("includes cd command for terminal when cwd is provided", () => {
       const script = buildOsascript(testCommand, "terminal", "/some/dir");
-      expect(script).toContain("cd /some/dir");
+      expect(script).toContain('cd "/some/dir"');
     });
 
     it("omits cd when cwd is not provided", () => {
       const script = buildOsascript(testCommand, "terminal");
       expect(script).not.toContain("cd ");
     });
+  });
+});
+
+describe("detectTerminal", () => {
+  it("returns a valid TerminalApp string", async () => {
+    const result = await detectTerminal();
+    expect(typeof result).toBe("string");
+    expect(["iterm2", "terminal"]).toContain(result);
+  });
+});
+
+describe("openInteractiveSession", () => {
+  it("returns an object with a success boolean", async () => {
+    const opts: LaunchOptions = {
+      agentName: "TestAgent",
+      skillsDir: "/tmp/skills",
+      instructionsDir: "/tmp/instructions",
+    };
+    const result = await openInteractiveSession(opts);
+    expect(typeof result.success).toBe("boolean");
+    // error property is optional but when present must be a string
+    if (result.error !== undefined) {
+      expect(typeof result.error).toBe("string");
+    }
   });
 });
