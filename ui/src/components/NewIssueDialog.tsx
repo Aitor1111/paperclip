@@ -43,6 +43,7 @@ import {
   ArrowDown,
   AlertTriangle,
   Tag,
+  Terminal,
   Calendar,
   Paperclip,
   FileText,
@@ -297,6 +298,7 @@ export function NewIssueDialog() {
   const [assigneeModelOverride, setAssigneeModelOverride] = useState("");
   const [assigneeThinkingEffort, setAssigneeThinkingEffort] = useState("");
   const [assigneeChrome, setAssigneeChrome] = useState(false);
+  const [isMeetSession, setIsMeetSession] = useState(false);
   const [executionWorkspaceMode, setExecutionWorkspaceMode] = useState<string>("shared_workspace");
   const [selectedExecutionWorkspaceId, setSelectedExecutionWorkspaceId] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -359,6 +361,12 @@ export function NewIssueDialog() {
     enabled: newIssueOpen,
     retry: false,
   });
+  const labelsQuery = useQuery({
+    queryKey: queryKeys.issues.labels(effectiveCompanyId!),
+    queryFn: () => issuesApi.listLabels(effectiveCompanyId!),
+    enabled: !!effectiveCompanyId && newIssueOpen,
+  });
+  const meetLabel = labelsQuery.data?.find((l: { name: string }) => l.name.toLowerCase() === "meet");
   const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
   const activeProjects = useMemo(
     () => (projects ?? []).filter((p) => !p.archivedAt),
@@ -662,6 +670,7 @@ export function NewIssueDialog() {
     setAssigneeModelOverride("");
     setAssigneeThinkingEffort("");
     setAssigneeChrome(false);
+    setIsMeetSession(false);
     setExecutionWorkspaceMode("shared_workspace");
     setSelectedExecutionWorkspaceId("");
     setExpanded(false);
@@ -743,6 +752,7 @@ export function NewIssueDialog() {
         : {}),
       ...(executionWorkspaceSettings ? { executionWorkspaceSettings } : {}),
       ...(executionPolicy ? { executionPolicy } : {}),
+      ...(isMeetSession && meetLabel ? { labelIds: [meetLabel.id] } : {}),
     });
   }
 
@@ -1618,6 +1628,24 @@ export function NewIssueDialog() {
             <Tag className="h-3 w-3" />
             Labels
           </button> */}
+
+          {/* Interactive session (meet label) toggle */}
+          {meetLabel && (
+            <button
+              type="button"
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors",
+                isMeetSession
+                  ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                  : "border-border text-muted-foreground hover:bg-accent/50",
+              )}
+              onClick={() => setIsMeetSession((v) => !v)}
+              disabled={createIssue.isPending}
+            >
+              <Terminal className="h-3 w-3" />
+              Interactive
+            </button>
+          )}
 
           <input
             ref={stageFileInputRef}
