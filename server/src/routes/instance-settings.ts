@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { patchInstanceExperimentalSettingsSchema, patchInstanceGeneralSettingsSchema } from "@paperclipai/shared";
@@ -5,6 +7,7 @@ import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { instanceSettingsService, logActivity } from "../services/index.js";
 import { getActorInfo } from "./authz.js";
+import { resolvePaperclipHomeDir } from "../home-paths.js";
 
 function assertCanManageInstanceSettings(req: Request) {
   if (req.actor.type !== "board") {
@@ -97,6 +100,33 @@ export function instanceSettingsRoutes(db: Db) {
       res.json(updated.experimental);
     },
   );
+
+  router.get("/instance/mcp-servers", async (req, res) => {
+    if (req.actor.type !== "board") {
+      throw forbidden("Board access required");
+    }
+    const homeDir = resolvePaperclipHomeDir();
+    const mcpConfigPath = path.join(homeDir, "mcp-servers.json");
+
+    try {
+      const content = await fs.readFile(mcpConfigPath, "utf-8");
+      const config = JSON.parse(content) as Record<string, unknown>;
+      const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
+
+      const result = Object.entries(servers).map(([name, serverConfig]) => ({
+        name,
+        type: typeof serverConfig.type === "string" ? serverConfig.type : (serverConfig.command ? "stdio" : "unknown"),
+        url: typeof serverConfig.url === "string" ? serverConfig.url : null,
+        command: typeof serverConfig.command === "string" ? serverConfig.command : null,
+        args: Array.isArray(serverConfig.args) ? serverConfig.args : null,
+      }));
+
+      res.json(result);
+    } catch {
+      // No config file or invalid JSON — return empty list
+      res.json([]);
+    }
+  });
 
   return router;
 }

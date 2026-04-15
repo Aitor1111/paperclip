@@ -7,7 +7,7 @@ import {
   MONTHLY_RETENTION_PRESETS,
   DEFAULT_BACKUP_RETENTION,
 } from "@paperclipai/shared";
-import { LogOut, SlidersHorizontal } from "lucide-react";
+import { Globe, LogOut, SlidersHorizontal, Terminal } from "lucide-react";
 import { authApi } from "@/api/auth";
 import { instanceSettingsApi } from "@/api/instanceSettings";
 import { Button } from "../components/ui/button";
@@ -308,6 +308,8 @@ export function InstanceGeneralSettings() {
         </div>
       </section>
 
+      <McpServersSection />
+
       <section className="rounded-xl border border-border bg-card p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1.5">
@@ -328,5 +330,61 @@ export function InstanceGeneralSettings() {
         </div>
       </section>
     </div>
+  );
+}
+
+function McpServersSection() {
+  const mcpQuery = useQuery({
+    queryKey: queryKeys.instance.mcpServers,
+    queryFn: () => instanceSettingsApi.getMcpServers(),
+  });
+
+  const servers = mcpQuery.data ?? [];
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-5">
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <h2 className="text-sm font-semibold">MCP Servers</h2>
+          <p className="max-w-2xl text-sm text-muted-foreground">
+            Model Context Protocol servers configured for this instance. Agents
+            with an <code>mcpConfigPath</code> adapter setting will have access
+            to these servers.
+          </p>
+        </div>
+        {mcpQuery.isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading MCP servers...</p>
+        ) : servers.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No MCP servers configured. Add servers to your{" "}
+            <code>mcp-servers.json</code> file in the Paperclip home directory.
+          </p>
+        ) : (
+          <div className="divide-y divide-border rounded-lg border border-border">
+            {servers.map((server) => (
+              <div
+                key={server.name}
+                className="flex items-center gap-3 px-3 py-2.5"
+              >
+                {server.type === "http" ? (
+                  <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                ) : (
+                  <Terminal className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                )}
+                <span className="text-sm font-medium">{server.name}</span>
+                <span className="text-xs text-muted-foreground truncate">
+                  {server.type === "http"
+                    ? server.url
+                    : [server.command, ...(server.args ?? [])].join(" ")}
+                </span>
+                <span className="ml-auto shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  {server.type}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }

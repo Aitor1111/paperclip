@@ -71,6 +71,7 @@ import {
   ArrowLeft,
   HelpCircle,
   FolderOpen,
+  Globe,
   Terminal,
 } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
@@ -1344,6 +1345,60 @@ function AgentOverview({
       <div className="space-y-3">
         <h3 className="text-sm font-medium">Costs</h3>
         <CostsSection runtimeState={runtimeState} runs={runs} />
+      </div>
+
+      {/* MCP Servers */}
+      {typeof agent.adapterConfig.mcpConfigPath === "string" && agent.adapterConfig.mcpConfigPath.trim() !== "" && (
+        <AgentMcpServersCard />
+      )}
+    </div>
+  );
+}
+
+/* ---- MCP Servers Card (inline) ---- */
+
+function AgentMcpServersCard() {
+  const { data: servers, isLoading } = useQuery({
+    queryKey: queryKeys.instance.mcpServers,
+    queryFn: () => instanceSettingsApi.getMcpServers(),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        <h3 className="text-sm font-medium">MCP Servers</h3>
+        <p className="text-sm text-muted-foreground">Loading MCP servers...</p>
+      </div>
+    );
+  }
+
+  if (!servers || servers.length === 0) return null;
+
+  return (
+    <div className="space-y-3">
+      <h3 className="text-sm font-medium">MCP Servers</h3>
+      <div className="border border-border rounded-lg divide-y divide-border">
+        {servers.map((server) => (
+          <div
+            key={server.name}
+            className="flex items-center gap-3 px-3 py-2 text-sm"
+          >
+            {server.type === "http" ? (
+              <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            ) : (
+              <Terminal className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            )}
+            <span className="font-medium">{server.name}</span>
+            <span className="text-xs text-muted-foreground truncate">
+              {server.type === "http"
+                ? server.url
+                : [server.command, ...(server.args ?? [])].join(" ")}
+            </span>
+            <span className="ml-auto shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {server.type}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   );
