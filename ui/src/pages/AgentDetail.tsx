@@ -1348,9 +1348,7 @@ function AgentOverview({
       </div>
 
       {/* MCP Servers */}
-      {typeof agent.adapterConfig.mcpConfigPath === "string" && agent.adapterConfig.mcpConfigPath.trim() !== "" && (
-        <AgentMcpServersCard />
-      )}
+      <AgentMcpServersCard />
     </div>
   );
 }
