@@ -6,7 +6,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import type { Request as ExpressRequest, RequestHandler } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt } from "drizzle-orm";
 import {
   createDb,
   ensurePostgresDatabase,
@@ -22,6 +22,7 @@ import {
   companies,
   companyMemberships,
   instanceUserRoles,
+  issues,
 } from "@paperclipai/db";
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
@@ -77,6 +78,22 @@ export interface StartedServer {
   listenPort: number;
   apiUrl: string;
   databaseUrl: string;
+}
+
+async function archiveDoneIssues(db: any): Promise<number> {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const result = await db
+    .update(issues)
+    .set({ hiddenAt: new Date(), updatedAt: new Date() })
+    .where(
+      and(
+        inArray(issues.status, ["done", "cancelled"]),
+        isNull(issues.hiddenAt),
+        lt(issues.updatedAt, cutoff),
+      ),
+    )
+    .returning({ id: issues.id });
+  return result.length;
 }
 
 export async function startServer(): Promise<StartedServer> {
@@ -577,7 +594,7 @@ export async function startServer(): Promise<StartedServer> {
   if (config.heartbeatSchedulerEnabled) {
     const heartbeat = heartbeatService(db as any);
     const routines = routineService(db as any);
-  
+
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
     void heartbeat
@@ -586,6 +603,9 @@ export async function startServer(): Promise<StartedServer> {
       .catch((err) => {
         logger.error({ err }, "startup heartbeat recovery failed");
       });
+
+    let lastArchiveRun = 0;
+
     setInterval(() => {
       void heartbeat
         .tickTimers(new Date())
@@ -608,7 +628,7 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err }, "routine scheduler tick failed");
         });
-  
+
       // Periodically reap orphaned runs (5-min staleness threshold) and make sure
       // persisted queued work is still being driven forward.
       void heartbeat
@@ -617,6 +637,20 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err }, "periodic heartbeat recovery failed");
         });
+
+      // Auto-archive done/cancelled issues older than 24 hours (throttled to every 30 minutes).
+      if (Date.now() - lastArchiveRun > 30 * 60 * 1000) {
+        lastArchiveRun = Date.now();
+        void archiveDoneIssues(db)
+          .then((count) => {
+            if (count > 0) {
+              logger.info({ archived: count }, "auto-archived completed issues");
+            }
+          })
+          .catch((err) => {
+            logger.error({ err }, "auto-archive of completed issues failed");
+          });
+      }
     }, config.heartbeatSchedulerIntervalMs);
   }
   
