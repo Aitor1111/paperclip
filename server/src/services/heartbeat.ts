@@ -3317,15 +3317,36 @@ export function heartbeatService(db: Db) {
         const adapterModuleDir = path.dirname(adapterServerEntry);
         const skillsDir = await resolvePaperclipSkillsDir(adapterModuleDir) ?? adapterModuleDir;
 
-        // Build an initial prompt from the issue title if available
-        const initialPrompt = issueContext?.title
-          ? `Work on: ${issueContext.title}`
-          : undefined;
+        // Build a rich initial prompt with agent identity and task context
+        const meetPromptParts: string[] = [];
+        meetPromptParts.push(`You are ${agent.name} (${agent.role}), agent ID ${agent.id}.`);
+        meetPromptParts.push(`Company: ${agent.companyId}.`);
+        if (issueContext) {
+          meetPromptParts.push("");
+          meetPromptParts.push(`## Your current task`);
+          meetPromptParts.push(`**${issueContext.identifier ?? ""}: ${issueContext.title}**`);
+          meetPromptParts.push(`Status: ${issueContext.status} | Priority: ${issueContext.priority}`);
+        }
+        meetPromptParts.push("");
+        meetPromptParts.push("This is an interactive session. Collaborate with the user to complete the task.");
+        const initialPrompt = meetPromptParts.join("\n");
 
-        // Use the agent's configured cwd so the terminal opens in the right project directory
-        const agentConfig = parseObject(agent.adapterConfig);
-        const rawCwd = typeof agentConfig.cwd === "string" ? agentConfig.cwd.trim() : "";
-        const meetCwd = rawCwd || undefined;
+        // Resolve cwd from project workspace if task has a project
+        let meetCwd: string | undefined;
+        if (issueContext?.projectId) {
+          const primaryWs = await db
+            .select({ cwd: projectWorkspaces.cwd })
+            .from(projectWorkspaces)
+            .where(
+              and(
+                eq(projectWorkspaces.projectId, issueContext.projectId),
+                eq(projectWorkspaces.companyId, agent.companyId),
+                eq(projectWorkspaces.isPrimary, true),
+              ),
+            )
+            .then((rows) => rows[0] ?? null);
+          if (primaryWs?.cwd) meetCwd = primaryWs.cwd;
+        }
 
         const meetResult = await openInteractiveSession({
           agentName: agent.name,

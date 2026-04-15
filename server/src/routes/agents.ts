@@ -3,7 +3,7 @@ import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
-import { agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
+import { agents as agentsTable, companies, heartbeatRuns, issues as issuesTable, projectWorkspaces } from "@paperclipai/db";
 import { and, desc, eq, inArray, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
@@ -2246,32 +2246,56 @@ export function agentRoutes(db: Db) {
     const adapterModuleDir = path.dirname(adapterServerEntry);
     const skillsDir = await resolvePaperclipSkillsDir(adapterModuleDir) ?? adapterModuleDir;
 
-    // If a taskId is provided without a prompt, build a prompt from the issue
-    let initialPrompt = typeof req.body.prompt === "string" ? req.body.prompt.trim() || undefined : undefined;
-    const taskId = typeof req.body.taskId === "string" ? req.body.taskId.trim() || undefined : undefined;
+    // Build prompt with agent identity + task context
+    const promptParts: string[] = [];
+    promptParts.push(`You are ${agent.name} (${agent.role}), agent ID ${agent.id}.`);
 
-    if (taskId && !initialPrompt) {
+    const taskId = typeof req.body.taskId === "string" ? req.body.taskId.trim() || undefined : undefined;
+    const userPrompt = typeof req.body.prompt === "string" ? req.body.prompt.trim() || undefined : undefined;
+    let meetCwd: string | undefined;
+
+    if (taskId) {
       const issueSvc = issueService(db);
       const issue = await issueSvc.getById(taskId);
       if (issue) {
-        const parts = [issue.title];
-        if (issue.description) parts.push(issue.description);
-        initialPrompt = parts.join("\n\n");
+        promptParts.push("");
+        promptParts.push(`## Your current task`);
+        promptParts.push(`**${issue.title}**`);
+        if (issue.description) promptParts.push(issue.description);
+
+        // Resolve cwd from project workspace
+        if (issue.projectId) {
+          const primaryWs = await db
+            .select({ cwd: projectWorkspaces.cwd })
+            .from(projectWorkspaces)
+            .where(
+              and(
+                eq(projectWorkspaces.projectId, issue.projectId),
+                eq(projectWorkspaces.companyId, agent.companyId),
+                eq(projectWorkspaces.isPrimary, true),
+              ),
+            )
+            .then((rows) => rows[0] ?? null);
+          if (primaryWs?.cwd) meetCwd = primaryWs.cwd;
+        }
       }
     }
 
-    // Resolve the agent's working directory from adapter config
-    const agentConfig = (agent.adapterConfig ?? {}) as Record<string, unknown>;
-    const agentCwd = typeof agentConfig.cwd === "string" && agentConfig.cwd.trim()
-      ? agentConfig.cwd.trim()
-      : undefined;
+    if (userPrompt) {
+      promptParts.push("");
+      promptParts.push(userPrompt);
+    }
+
+    promptParts.push("");
+    promptParts.push("This is an interactive session. Collaborate with the user to complete the task.");
+    const initialPrompt = promptParts.join("\n");
 
     const result = await openInteractiveSession({
       agentName: agent.name,
       skillsDir,
       instructionsDir,
       initialPrompt,
-      cwd: agentCwd,
+      cwd: meetCwd,
     });
 
     if (!result.success) {
