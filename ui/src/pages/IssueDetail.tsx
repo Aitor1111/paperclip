@@ -87,6 +87,7 @@ import {
   Paperclip,
   Repeat,
   SlidersHorizontal,
+  Terminal,
   Trash2,
 } from "lucide-react";
 import {
@@ -1335,6 +1336,23 @@ export function IssueDetail() {
     },
   });
 
+  const meetAgent = useMutation({
+    mutationFn: () => {
+      if (!issue?.assigneeAgentId) throw new Error("No agent assigned");
+      return agentsApi.meet(issue.assigneeAgentId, { taskId: issue.id }, resolvedCompanyId ?? undefined);
+    },
+    onSuccess: (data) => {
+      pushToast({ title: `Meeting started with ${data.agentName}`, tone: "success" });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Failed to start meeting",
+        body: err instanceof Error ? err.message : "Unable to start agent meeting",
+        tone: "error",
+      });
+    },
+  });
+
   useEffect(() => {
     const titleLabel = issue?.title ?? issueId ?? "Issue";
     setBreadcrumbs([
@@ -1784,6 +1802,19 @@ export function IssueDetail() {
             >
               <SlidersHorizontal className="h-4 w-4" />
             </Button>
+
+            {issue?.assigneeAgentId && (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="shrink-0"
+                onClick={() => meetAgent.mutate()}
+                disabled={meetAgent.isPending}
+                title="Meet with agent"
+              >
+                <Terminal className="h-4 w-4" />
+              </Button>
+            )}
 
             <Popover open={moreOpen} onOpenChange={setMoreOpen}>
               <PopoverTrigger asChild>

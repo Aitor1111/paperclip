@@ -853,7 +853,7 @@ export function AgentDetail() {
   });
 
   const meetMutation = useMutation({
-    mutationFn: () => agentsApi.meet(agentLookupRef, resolvedCompanyId ?? undefined),
+    mutationFn: () => agentsApi.meet(agentLookupRef, undefined, resolvedCompanyId ?? undefined),
     onSuccess: () => {
       pushToast({ title: "Session opened", body: "Interactive terminal session opened", tone: "success" });
     },
