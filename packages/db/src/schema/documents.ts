@@ -8,6 +8,7 @@ export const documents = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id").notNull().references(() => companies.id),
     title: text("title"),
+    folder: text("folder"),
     format: text("format").notNull().default("markdown"),
     latestBody: text("latest_body").notNull(),
     latestRevisionId: uuid("latest_revision_id"),

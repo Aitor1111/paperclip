@@ -18,6 +18,7 @@ export function companyDocumentRoutes(db: Db) {
       .select({
         id: documents.id,
         title: documents.title,
+        folder: documents.folder,
         format: documents.format,
         latestRevisionNumber: documents.latestRevisionNumber,
         createdByAgentId: documents.createdByAgentId,
@@ -47,6 +48,7 @@ export function companyDocumentRoutes(db: Db) {
         id: documents.id,
         companyId: documents.companyId,
         title: documents.title,
+        folder: documents.folder,
         format: documents.format,
         latestBody: documents.latestBody,
         latestRevisionId: documents.latestRevisionId,
@@ -83,10 +85,11 @@ export function companyDocumentRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
 
-    const { title, body, format = "markdown" } = req.body as {
+    const { title, body, format = "markdown", folder } = req.body as {
       title: string;
       body: string;
       format?: string;
+      folder?: string;
     };
 
     const actor = getActorInfo(req);
@@ -101,6 +104,7 @@ export function companyDocumentRoutes(db: Db) {
         .values({
           companyId,
           title,
+          folder: folder ?? null,
           format,
           latestBody: body,
           latestRevisionId: null,
@@ -170,11 +174,12 @@ export function companyDocumentRoutes(db: Db) {
     }
     assertCompanyAccess(req, existing.companyId);
 
-    const { title, body, changeSummary, baseRevisionId } = req.body as {
+    const { title, body, changeSummary, baseRevisionId, folder } = req.body as {
       title?: string;
       body?: string;
       changeSummary?: string;
       baseRevisionId?: string;
+      folder?: string | null;
     };
 
     if (baseRevisionId && baseRevisionId !== existing.latestRevisionId) {
@@ -214,6 +219,7 @@ export function companyDocumentRoutes(db: Db) {
         .update(documents)
         .set({
           title: newTitle,
+          ...(folder !== undefined ? { folder } : {}),
           latestBody: newBody,
           latestRevisionId: revision.id,
           latestRevisionNumber: nextRevisionNumber,

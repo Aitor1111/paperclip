@@ -3,6 +3,7 @@ import { api } from "./client";
 export interface CompanyDocument {
   id: string;
   title: string | null;
+  folder: string | null;
   format: string;
   latestRevisionNumber: number;
   createdByAgentId: string | null;
@@ -24,9 +25,9 @@ export const companyDocumentsApi = {
     api.get<CompanyDocument[]>(`/companies/${companyId}/documents`),
   get: (id: string) =>
     api.get<CompanyDocumentDetail>(`/documents/${id}`),
-  create: (companyId: string, data: { title: string; body: string }) =>
+  create: (companyId: string, data: { title: string; body: string; folder?: string }) =>
     api.post<CompanyDocumentDetail>(`/companies/${companyId}/documents`, data),
-  update: (id: string, data: { title?: string; body?: string; changeSummary?: string; baseRevisionId?: string }) =>
+  update: (id: string, data: { title?: string; body?: string; changeSummary?: string; baseRevisionId?: string; folder?: string | null }) =>
     api.patch<CompanyDocumentDetail>(`/documents/${id}`, data),
   delete: (id: string) =>
     api.delete<{ ok: true }>(`/documents/${id}`),

@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { companyDocumentsApi } from "../api/company-documents";
 import { useCompany } from "../context/CompanyContext";
-import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useBreadcrumbs, type Breadcrumb } from "../context/BreadcrumbContext";
 import { useToast } from "../context/ToastContext";
 import { useAutosaveIndicator } from "../hooks/useAutosaveIndicator";
 import { queryKeys } from "../lib/queryKeys";
@@ -13,7 +13,8 @@ import { MarkdownBody } from "../components/MarkdownBody";
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { Button } from "@/components/ui/button";
-import { FileText, Pencil, Eye, Trash2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { FileText, Pencil, Eye, Trash2, FolderOpen, Check, X } from "lucide-react";
 
 const AUTOSAVE_DEBOUNCE_MS = 900;
 
@@ -28,6 +29,8 @@ export function DocumentDetail() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [draftInitialized, setDraftInitialized] = useState(false);
+  const [editingFolder, setEditingFolder] = useState(false);
+  const [folderDraft, setFolderDraft] = useState("");
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
     state: autosaveState,
@@ -62,10 +65,12 @@ export function DocumentDetail() {
   }, [doc, editing]);
 
   useEffect(() => {
-    setBreadcrumbs([
-      { label: "Docs", href: "/documents" },
-      { label: doc?.title ?? "Document" },
-    ]);
+    const crumbs: Breadcrumb[] = [{ label: "Docs", href: "/documents" }];
+    if (doc?.folder) {
+      crumbs.push({ label: doc.folder });
+    }
+    crumbs.push({ label: doc?.title ?? "Document" });
+    setBreadcrumbs(crumbs);
   }, [setBreadcrumbs, doc]);
 
   useEffect(() => {
@@ -77,7 +82,7 @@ export function DocumentDetail() {
   }, []);
 
   const updateDocument = useMutation({
-    mutationFn: (data: { title?: string; body?: string; changeSummary?: string; baseRevisionId?: string }) =>
+    mutationFn: (data: { title?: string; body?: string; changeSummary?: string; baseRevisionId?: string; folder?: string | null }) =>
       companyDocumentsApi.update(id!, data),
     onSuccess: () => {
       queryClient.invalidateQueries({
@@ -184,6 +189,51 @@ export function DocumentDetail() {
               <Trash2 className="h-4 w-4" />
             </Button>
           </div>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <FolderOpen className="h-3.5 w-3.5" />
+          {editingFolder ? (
+            <form
+              className="flex items-center gap-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const trimmed = folderDraft.trim();
+                updateDocument.mutate({ folder: trimmed || null });
+                setEditingFolder(false);
+              }}
+            >
+              <Input
+                autoFocus
+                value={folderDraft}
+                onChange={(e) => setFolderDraft(e.target.value)}
+                placeholder="Folder name..."
+                className="h-6 w-36 text-xs"
+              />
+              <Button type="submit" variant="ghost" size="icon-xs">
+                <Check className="h-3 w-3" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => setEditingFolder(false)}
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              className="hover:text-foreground transition-colors"
+              onClick={() => {
+                setFolderDraft(doc.folder ?? "");
+                setEditingFolder(true);
+              }}
+            >
+              {doc.folder ?? "Unfiled"}
+            </button>
+          )}
         </div>
 
         <InlineEditor
