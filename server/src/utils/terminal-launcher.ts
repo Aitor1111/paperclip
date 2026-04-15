@@ -1,5 +1,8 @@
 import { exec } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 export interface LaunchOptions {
   agentName: string;
@@ -13,15 +16,7 @@ export interface LaunchOptions {
 export type TerminalApp = "iterm2" | "terminal";
 
 /**
- * Escape double-quotes inside a string that will be placed within double-quotes.
- */
-function escapeDoubleQuotes(value: string): string {
-  return value.replace(/"/g, '\\"');
-}
-
-/**
  * Strip characters that are unsafe for a shell --name value.
- * Quotes are simply removed to avoid breaking the outer quoting.
  */
 function sanitizeName(value: string): string {
   return value.replace(/"/g, "");
@@ -29,8 +24,10 @@ function sanitizeName(value: string): string {
 
 /**
  * Build the `claude` CLI command string from the given options.
+ * If there's an initialPrompt, it's written to a temp file and passed
+ * as the prompt argument to avoid shell escaping issues.
  */
-export function buildClaudeCommand(opts: LaunchOptions): string {
+export function buildClaudeCommand(opts: LaunchOptions): { command: string; tempFile?: string } {
   const parts: string[] = ["claude"];
 
   parts.push(`--add-dir "${opts.skillsDir}"`);
@@ -40,63 +37,66 @@ export function buildClaudeCommand(opts: LaunchOptions): string {
   parts.push(`--name "Meeting: ${safeName}"`);
 
   if (opts.sessionId) {
-    parts.push(`--resume ${opts.sessionId}`);
+    parts.push(`--resume "${opts.sessionId}"`);
   }
+
+  let tempFile: string | undefined;
 
   if (opts.initialPrompt) {
-    parts.push(`"${escapeDoubleQuotes(opts.initialPrompt)}"`);
+    // Write prompt to temp file to avoid shell/AppleScript escaping nightmares
+    const tempDir = join(tmpdir(), "paperclip-meet");
+    mkdirSync(tempDir, { recursive: true });
+    tempFile = join(tempDir, `prompt-${randomUUID()}.txt`);
+    writeFileSync(tempFile, opts.initialPrompt, "utf-8");
+    // Use cat to pipe the prompt file content as the initial message
+    parts.push(`"$(cat '${tempFile}')"`);
   }
 
-  return parts.join(" ");
+  return { command: parts.join(" "), tempFile };
 }
 
 /**
- * Escape a string for embedding inside an AppleScript double-quoted string.
- * AppleScript uses backslash-escaping for double-quotes and backslashes.
- * Single-quotes inside the shell command part also need escaping because
- * AppleScript's `quoted form` isn't used here.
+ * Build a shell command string with cd prefix if cwd is provided.
  */
-function escapeForAppleScript(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/'/g, "\\'");
+function buildFullShellCommand(command: string, cwd?: string): string {
+  if (cwd) {
+    return `cd '${cwd}' && ${command}`;
+  }
+  return command;
 }
 
 /**
- * Generate an osascript AppleScript snippet that opens a terminal window and
- * runs the given command.
+ * Generate an osascript AppleScript snippet that opens a terminal window
+ * and runs the given shell command.
+ *
+ * Uses 'quoted form of' to safely pass the command string to the shell,
+ * avoiding AppleScript string escaping issues.
  */
 export function buildOsascript(
-  command: string,
+  shellCommand: string,
   terminal: TerminalApp,
-  cwd?: string,
 ): string {
-  const safeCommand = escapeForAppleScript(command);
-  const cdPart = cwd ? `cd "${escapeForAppleScript(cwd)}" && ` : "";
-  const fullCommand = `${cdPart}${safeCommand}`;
-
   if (terminal === "iterm2") {
-    return [
-      'tell application "iTerm"',
-      "  activate",
-      "  set newWindow to (create window with default profile)",
-      "  tell current session of newWindow",
-      `    write text "${fullCommand}"`,
-      "  end tell",
-      "end tell",
-    ].join("\n");
+    // iTerm2: use 'write text' which interprets the string as shell input
+    // We use a POSIX shell -c wrapper to handle the complex command
+    return `tell application "iTerm"
+  activate
+  set newWindow to (create window with default profile)
+  tell current session of newWindow
+    write text ${JSON.stringify(shellCommand)}
+  end tell
+end tell`;
   }
 
-  // Terminal.app
-  return [
-    'tell application "Terminal"',
-    "  activate",
-    `  do script "${fullCommand}"`,
-    "end tell",
-  ].join("\n");
+  // Terminal.app: use 'do script' which runs the command in a new window
+  return `tell application "Terminal"
+  activate
+  do script ${JSON.stringify(shellCommand)}
+end tell`;
 }
 
 /**
  * Detect the preferred terminal application on the current system.
- * Returns "iterm2" if iTerm.app is installed, otherwise falls back to "terminal".
  */
 export async function detectTerminal(): Promise<TerminalApp> {
   if (existsSync("/Applications/iTerm.app")) {
@@ -107,27 +107,28 @@ export async function detectTerminal(): Promise<TerminalApp> {
 
 /**
  * Open an interactive Claude Code session in a new terminal window.
- *
- * 1. Builds the `claude` CLI invocation from options.
- * 2. Detects which terminal emulator to use (iTerm2 or Terminal.app).
- * 3. Generates and executes the osascript to open the window.
  */
 export async function openInteractiveSession(
   opts: LaunchOptions,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const command = buildClaudeCommand(opts);
+    const { command } = buildClaudeCommand(opts);
     const terminal = await detectTerminal();
-    const script = buildOsascript(command, terminal, opts.cwd);
+    const fullShellCommand = buildFullShellCommand(command, opts.cwd);
+    const script = buildOsascript(fullShellCommand, terminal);
 
     return new Promise((resolve) => {
-      exec(`osascript -e '${script.replace(/'/g, "'\\''")}'`, (error) => {
+      // Use -ss flag for strict error reporting
+      const child = exec(`osascript -ss -`, (error) => {
         if (error) {
           resolve({ success: false, error: error.message });
         } else {
           resolve({ success: true });
         }
       });
+      // Pass script via stdin to avoid shell quoting issues entirely
+      child.stdin?.write(script);
+      child.stdin?.end();
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

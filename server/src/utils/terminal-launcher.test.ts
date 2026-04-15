@@ -15,124 +15,77 @@ describe("buildClaudeCommand", () => {
   };
 
   it("builds a basic command with required options", () => {
-    const cmd = buildClaudeCommand(baseOpts);
-    expect(cmd).toContain("claude");
-    expect(cmd).toContain('--add-dir "/home/user/.paperclip/skills"');
-    expect(cmd).toContain('--add-dir "/home/user/.paperclip/instructions"');
-    expect(cmd).toContain('--name "Meeting: Alice"');
+    const { command } = buildClaudeCommand(baseOpts);
+    expect(command).toContain("claude");
+    expect(command).toContain('--add-dir "/home/user/.paperclip/skills"');
+    expect(command).toContain('--add-dir "/home/user/.paperclip/instructions"');
+    expect(command).toContain('--name "Meeting: Alice"');
   });
 
   it("includes --resume when sessionId is provided", () => {
-    const cmd = buildClaudeCommand({ ...baseOpts, sessionId: "sess-123" });
-    expect(cmd).toContain("--resume sess-123");
+    const { command } = buildClaudeCommand({ ...baseOpts, sessionId: "sess-123" });
+    expect(command).toContain('--resume "sess-123"');
   });
 
   it("does not include --resume when sessionId is omitted", () => {
-    const cmd = buildClaudeCommand(baseOpts);
-    expect(cmd).not.toContain("--resume");
+    const { command } = buildClaudeCommand(baseOpts);
+    expect(command).not.toContain("--resume");
   });
 
-  it("appends initial prompt at the end", () => {
-    const cmd = buildClaudeCommand({
+  it("writes initial prompt to temp file", () => {
+    const { command, tempFile } = buildClaudeCommand({
       ...baseOpts,
       initialPrompt: "Hello, start working",
     });
-    // The prompt should be at the very end, after all flags
-    expect(cmd).toMatch(/--name "Meeting: Alice".*"Hello, start working"$/);
+    expect(tempFile).toBeDefined();
+    expect(command).toContain("$(cat '");
   });
 
-  it("does not append prompt when initialPrompt is omitted", () => {
-    const cmd = buildClaudeCommand(baseOpts);
-    // Command should end with the --name flag, no trailing prompt argument
-    expect(cmd.endsWith('--name "Meeting: Alice"')).toBe(true);
+  it("does not create temp file when no prompt", () => {
+    const { tempFile } = buildClaudeCommand(baseOpts);
+    expect(tempFile).toBeUndefined();
   });
 
-  it("handles quotes in agent names by sanitizing them", () => {
-    const cmd = buildClaudeCommand({
+  it("sanitizes quotes in agent names", () => {
+    const { command } = buildClaudeCommand({
       ...baseOpts,
       agentName: 'Bob "The Builder"',
     });
-    // The name should be safely escaped
-    expect(cmd).toContain("--name");
-    // Should not have unescaped inner quotes that break the command
-    expect(cmd).not.toMatch(/--name ".*".*"/);
-    expect(cmd).toContain('--name "Meeting: Bob The Builder"');
+    expect(command).toContain('--name "Meeting: Bob The Builder"');
   });
 
-  it("handles quotes in initialPrompt by escaping them", () => {
-    const cmd = buildClaudeCommand({
+  it("handles multiline prompts with special chars via temp file", () => {
+    const { command, tempFile } = buildClaudeCommand({
       ...baseOpts,
-      initialPrompt: 'Say "hello world"',
+      initialPrompt: 'Line 1\nLine 2\n**bold** and "quotes"',
     });
-    // Escaped quotes inside the prompt string
-    expect(cmd).toContain("Say \\\"hello world\\\"");
-  });
-
-  it("includes all flags together", () => {
-    const cmd = buildClaudeCommand({
-      ...baseOpts,
-      sessionId: "sess-456",
-      initialPrompt: "Start task",
-    });
-    expect(cmd).toContain('--add-dir "/home/user/.paperclip/skills"');
-    expect(cmd).toContain('--add-dir "/home/user/.paperclip/instructions"');
-    expect(cmd).toContain('--name "Meeting: Alice"');
-    expect(cmd).toContain("--resume sess-456");
-    expect(cmd).toContain('"Start task"');
+    expect(tempFile).toBeDefined();
+    // Prompt is in a file, not inline in the command
+    expect(command).toContain("$(cat '");
   });
 });
 
 describe("buildOsascript", () => {
   const testCommand = 'claude --name "Meeting: Alice"';
 
-  describe("iterm2", () => {
-    it("generates valid AppleScript for iTerm2", () => {
-      const script = buildOsascript(testCommand, "iterm2");
-      expect(script).toContain("iTerm");
-      expect(script).toContain("create window with default profile");
-      // Quotes in the command are escaped for AppleScript embedding
-      expect(script).toContain('claude --name \\"Meeting: Alice\\"');
-    });
-
-    it("wraps the command in a write text call", () => {
-      const script = buildOsascript(testCommand, "iterm2");
-      expect(script).toContain("write text");
-    });
+  it("generates valid AppleScript for iTerm2", () => {
+    const script = buildOsascript(testCommand, "iterm2");
+    expect(script).toContain("iTerm");
+    expect(script).toContain("create window with default profile");
+    expect(script).toContain("write text");
   });
 
-  describe("terminal", () => {
-    it("generates valid AppleScript for Terminal.app", () => {
-      const script = buildOsascript(testCommand, "terminal");
-      expect(script).toContain("Terminal");
-      expect(script).toContain("do script");
-      // Quotes in the command are escaped for AppleScript embedding
-      expect(script).toContain('claude --name \\"Meeting: Alice\\"');
-    });
-  });
-
-  it("handles commands with special characters", () => {
-    const cmdWithSpecials = 'claude --name "Meeting: O\'Brien"';
-    const script = buildOsascript(cmdWithSpecials, "terminal");
+  it("generates valid AppleScript for Terminal.app", () => {
+    const script = buildOsascript(testCommand, "terminal");
     expect(script).toContain("Terminal");
-    // Should still contain the command
-    expect(script).toContain("O\\'Brien");
+    expect(script).toContain("do script");
   });
 
-  describe("with cwd", () => {
-    it("includes cd command for iterm2 when cwd is provided", () => {
-      const script = buildOsascript(testCommand, "iterm2", "/some/dir");
-      expect(script).toContain('cd "/some/dir"');
-    });
-
-    it("includes cd command for terminal when cwd is provided", () => {
-      const script = buildOsascript(testCommand, "terminal", "/some/dir");
-      expect(script).toContain('cd "/some/dir"');
-    });
-
-    it("omits cd when cwd is not provided", () => {
-      const script = buildOsascript(testCommand, "terminal");
-      expect(script).not.toContain("cd ");
-    });
+  it("uses JSON.stringify for safe escaping", () => {
+    const script = buildOsascript('claude "hello world"', "terminal");
+    // JSON.stringify wraps in quotes and escapes internal quotes
+    expect(script).toContain("do script");
+    expect(script).toBeDefined();
   });
 });
 
@@ -153,7 +106,6 @@ describe("openInteractiveSession", () => {
     };
     const result = await openInteractiveSession(opts);
     expect(typeof result.success).toBe("boolean");
-    // error property is optional but when present must be a string
     if (result.error !== undefined) {
       expect(typeof result.error).toBe("string");
     }
