@@ -2260,11 +2260,18 @@ export function agentRoutes(db: Db) {
       }
     }
 
+    // Resolve the agent's working directory from adapter config
+    const agentConfig = (agent.adapterConfig ?? {}) as Record<string, unknown>;
+    const agentCwd = typeof agentConfig.cwd === "string" && agentConfig.cwd.trim()
+      ? agentConfig.cwd.trim()
+      : undefined;
+
     const result = await openInteractiveSession({
       agentName: agent.name,
       skillsDir,
       instructionsDir,
       initialPrompt,
+      cwd: agentCwd,
     });
 
     if (!result.success) {

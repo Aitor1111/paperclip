@@ -3322,11 +3322,17 @@ export function heartbeatService(db: Db) {
           ? `Work on: ${issueContext.title}`
           : undefined;
 
+        // Use the agent's configured cwd so the terminal opens in the right project directory
+        const agentConfig = parseObject(agent.adapterConfig);
+        const rawCwd = typeof agentConfig.cwd === "string" ? agentConfig.cwd.trim() : "";
+        const meetCwd = rawCwd || undefined;
+
         const meetResult = await openInteractiveSession({
           agentName: agent.name,
           skillsDir,
           instructionsDir,
           initialPrompt,
+          cwd: meetCwd,
         });
 
         if (!meetResult.success) {
