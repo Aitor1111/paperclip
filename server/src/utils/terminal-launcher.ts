@@ -1,16 +1,22 @@
 import { exec } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+
+export type PermissionMode = "default" | "acceptEdits" | "auto" | "plan" | "dontAsk" | "bypassPermissions";
 
 export interface LaunchOptions {
   agentName: string;
   skillsDir: string;
   instructionsDir: string;
+  agentSkillsDirs?: string[];
   initialPrompt?: string;
+  systemPromptFile?: string;
   sessionId?: string;
   cwd?: string;
+  permissionMode?: PermissionMode;
+  allowedTools?: string[];
 }
 
 export type TerminalApp = "iterm2" | "terminal";
@@ -23,46 +29,116 @@ function sanitizeName(value: string): string {
 }
 
 /**
- * Build the `claude` CLI command string from the given options.
- * If there's an initialPrompt, it's written to a temp file and passed
- * as the prompt argument to avoid shell escaping issues.
+ * Build the `claude` CLI command arguments from the given options.
+ * Returns the argument list and any temp files created.
  */
-export function buildClaudeCommand(opts: LaunchOptions): { command: string; tempFile?: string } {
-  const parts: string[] = ["claude"];
+export function buildClaudeArgs(opts: LaunchOptions): string[] {
+  const args: string[] = [];
 
-  parts.push(`--add-dir "${opts.skillsDir}"`);
-  parts.push(`--add-dir "${opts.instructionsDir}"`);
+  args.push("--add-dir", opts.skillsDir);
+  args.push("--add-dir", opts.instructionsDir);
+
+  // Add agent-specific skill directories so Claude can discover them
+  if (opts.agentSkillsDirs?.length) {
+    for (const skillDir of opts.agentSkillsDirs) {
+      args.push("--add-dir", skillDir);
+    }
+  }
+
+  // Inject agent instructions into system prompt (replicates headless adapter behavior)
+  if (opts.systemPromptFile) {
+    args.push("--append-system-prompt-file", opts.systemPromptFile);
+  }
 
   const safeName = sanitizeName(opts.agentName);
-  parts.push(`--name "Meeting: ${safeName}"`);
+  args.push("--name", `Meeting: ${safeName}`);
+
+  if (opts.permissionMode) {
+    args.push("--permission-mode", opts.permissionMode);
+  }
+
+  if (opts.allowedTools?.length) {
+    for (const tool of opts.allowedTools) {
+      args.push("--allowedTools", tool);
+    }
+  }
 
   if (opts.sessionId) {
-    parts.push(`--resume "${opts.sessionId}"`);
+    args.push("--resume", opts.sessionId);
   }
 
-  let tempFile: string | undefined;
-
-  if (opts.initialPrompt) {
-    // Write prompt to temp file to avoid shell/AppleScript escaping nightmares
-    const tempDir = join(tmpdir(), "paperclip-meet");
-    mkdirSync(tempDir, { recursive: true });
-    tempFile = join(tempDir, `prompt-${randomUUID()}.txt`);
-    writeFileSync(tempFile, opts.initialPrompt, "utf-8");
-    // Use cat to pipe the prompt file content as the initial message
-    parts.push(`"$(cat '${tempFile}')"`);
-  }
-
-  return { command: parts.join(" "), tempFile };
+  return args;
 }
 
 /**
- * Build a shell command string with cd prefix if cwd is provided.
+ * Write a self-contained shell script that runs the claude command.
+ * This avoids AppleScript/shell escaping issues with long commands by keeping
+ * the command in a file rather than passing it inline.
  */
-function buildFullShellCommand(command: string, cwd?: string): string {
-  if (cwd) {
-    return `cd '${cwd}' && ${command}`;
+function writelaunchScript(opts: LaunchOptions): string {
+  const tempDir = join(tmpdir(), "paperclip-meet");
+  mkdirSync(tempDir, { recursive: true });
+  const scriptPath = join(tempDir, `launch-${randomUUID()}.sh`);
+
+  const args = buildClaudeArgs(opts);
+
+  // Build the script content with properly quoted arguments
+  const lines: string[] = [
+    "#!/bin/bash",
+    // Ensure claude is on PATH (common install locations)
+    'export PATH="$HOME/.claude/local/bin:$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"',
+  ];
+
+  if (opts.cwd) {
+    lines.push(`cd ${shellQuote(opts.cwd)}`);
   }
-  return command;
+
+  // Build the claude command with only values quoted (not flags)
+  const argPairs: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg.startsWith("--")) {
+      // Flag: don't quote it. Next arg is its value (if it exists and isn't a flag)
+      const nextArg = args[i + 1];
+      if (nextArg !== undefined && !nextArg.startsWith("--")) {
+        argPairs.push(`${arg} ${shellQuote(nextArg)}`);
+        i++; // skip the value
+      } else {
+        argPairs.push(arg);
+      }
+    } else {
+      argPairs.push(shellQuote(arg));
+    }
+  }
+  let cmd = `claude ${argPairs.join(" ")}`;
+
+  // Use -- to terminate options, then pass the prompt as a positional argument.
+  // This is critical because variadic flags like --allowedTools consume all
+  // subsequent non-flag arguments, so without -- the prompt gets eaten.
+  if (opts.initialPrompt) {
+    cmd += " --";
+    if (opts.initialPrompt.length <= 200 && !opts.initialPrompt.includes("\n")) {
+      cmd += ` ${shellQuote(opts.initialPrompt)}`;
+    } else {
+      const promptPath = join(tempDir, `prompt-${randomUUID()}.txt`);
+      writeFileSync(promptPath, opts.initialPrompt, "utf-8");
+      cmd += ` "$(cat ${shellQuote(promptPath)})"`;
+    }
+  }
+
+  lines.push(cmd);
+
+  writeFileSync(scriptPath, lines.join("\n") + "\n", "utf-8");
+  chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
+/**
+ * Quote a string for safe use in a bash script.
+ */
+function shellQuote(value: string): string {
+  // Use single quotes and escape any embedded single quotes
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 /**
@@ -107,15 +183,19 @@ export async function detectTerminal(): Promise<TerminalApp> {
 
 /**
  * Open an interactive Claude Code session in a new terminal window.
+ *
+ * Writes a self-contained shell script and tells the terminal to execute it.
+ * This avoids AppleScript string-length and shell-escaping issues that occur
+ * when commands with many --add-dir / --append-system-prompt-file flags are
+ * passed inline.
  */
 export async function openInteractiveSession(
   opts: LaunchOptions,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const { command } = buildClaudeCommand(opts);
+    const scriptPath = writelaunchScript(opts);
     const terminal = await detectTerminal();
-    const fullShellCommand = buildFullShellCommand(command, opts.cwd);
-    const script = buildOsascript(fullShellCommand, terminal);
+    const script = buildOsascript(scriptPath, terminal);
 
     return new Promise((resolve) => {
       // Use -ss flag for strict error reporting

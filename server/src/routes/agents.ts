@@ -1,6 +1,8 @@
 import { Router, type Request } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
 import { agents as agentsTable, companies, heartbeatRuns, issues as issuesTable, projectWorkspaces } from "@paperclipai/db";
@@ -2246,9 +2248,59 @@ export function agentRoutes(db: Db) {
     const adapterModuleDir = path.dirname(adapterServerEntry);
     const skillsDir = await resolvePaperclipSkillsDir(adapterModuleDir) ?? adapterModuleDir;
 
-    // Build prompt with agent identity + task context
-    const promptParts: string[] = [];
-    promptParts.push(`You are ${agent.name} (${agent.role}), agent ID ${agent.id}.`);
+    // Read agent instructions to include in the system prompt file later
+    let agentInstructionsContent = "";
+    try {
+      const bundle = await instructions.getBundle(agent);
+      const entryFile = bundle?.entryFile ?? "AGENTS.md";
+      const entryPath = path.join(instructionsDir, entryFile);
+      const rawContent = readFileSync(entryPath, "utf-8");
+      if (rawContent.trim().length > 0) {
+        const pathDirective =
+          `\nThe above agent instructions were loaded from ${entryPath}. ` +
+          `Resolve any relative file references from ${instructionsDir}. ` +
+          `This base directory is authoritative for sibling instruction files such as ` +
+          `./HEARTBEAT.md, ./SOUL.md, and ./TOOLS.md; do not resolve those from the parent agent directory.`;
+        agentInstructionsContent = rawContent + pathDirective;
+      }
+    } catch {
+      // No instructions file found — continue without
+    }
+
+    // Resolve agent-specific skills: read desired skills from agent config,
+    // resolve them against company skill entries, and collect source directories
+    const agentSkillsDirs: string[] = [];
+    try {
+      const agentConfig = (agent.adapterConfig ?? {}) as Record<string, unknown>;
+      const preference = readPaperclipSkillSyncPreference(agentConfig);
+      if (preference.explicit && preference.desiredSkills.length > 0) {
+        const runtimeEntries = await companySkills.listRuntimeSkillEntries(agent.companyId);
+        const desiredSet = new Set(preference.desiredSkills.map((s) => s.trim().toLowerCase()));
+        for (const entry of runtimeEntries) {
+          const keyMatch = desiredSet.has(entry.key.trim().toLowerCase());
+          const nameMatch = desiredSet.has(entry.runtimeName.trim().toLowerCase());
+          const slugMatch = desiredSet.has(entry.key.split("/").pop()?.trim().toLowerCase() ?? "");
+          if (keyMatch || nameMatch || slugMatch) {
+            agentSkillsDirs.push(entry.source);
+          }
+        }
+      }
+    } catch {
+      // Skill resolution failed — continue with Paperclip default skills only
+    }
+
+    // Build system prompt file: agent instructions + identity + task context
+    // Everything goes into --append-system-prompt-file because the positional
+    // prompt argument is unreliable in interactive mode with many flags.
+    const systemParts: string[] = [];
+
+    if (agentInstructionsContent) {
+      systemParts.push(agentInstructionsContent);
+    }
+
+    systemParts.push("");
+    systemParts.push(`## Session context`);
+    systemParts.push(`You are ${agent.name} (${agent.role}), agent ID ${agent.id}.`);
 
     const taskId = typeof req.body.taskId === "string" ? req.body.taskId.trim() || undefined : undefined;
     const userPrompt = typeof req.body.prompt === "string" ? req.body.prompt.trim() || undefined : undefined;
@@ -2258,10 +2310,10 @@ export function agentRoutes(db: Db) {
       const issueSvc = issueService(db);
       const issue = await issueSvc.getById(taskId);
       if (issue) {
-        promptParts.push("");
-        promptParts.push(`## Your current task`);
-        promptParts.push(`**${issue.title}**`);
-        if (issue.description) promptParts.push(issue.description);
+        systemParts.push("");
+        systemParts.push(`## Your current task`);
+        systemParts.push(`**${issue.title}**`);
+        if (issue.description) systemParts.push(issue.description);
 
         // Resolve cwd from project workspace
         if (issue.projectId) {
@@ -2282,20 +2334,56 @@ export function agentRoutes(db: Db) {
     }
 
     if (userPrompt) {
-      promptParts.push("");
-      promptParts.push(userPrompt);
+      systemParts.push("");
+      systemParts.push(userPrompt);
     }
 
-    promptParts.push("");
-    promptParts.push("This is an interactive session. Collaborate with the user to complete the task.");
-    const initialPrompt = promptParts.join("\n");
+    systemParts.push("");
+    systemParts.push("This is an interactive session. The user will send \"Go\" to start the session.");
+    systemParts.push("When you receive \"Go\": introduce yourself briefly (name and role), acknowledge the current task if one is assigned, and either ask a clarifying question or start working if the task is straightforward.");
+
+    // Write combined system prompt to temp file
+    let systemPromptFile: string | undefined;
+    const systemPromptContent = systemParts.join("\n");
+    if (systemPromptContent.trim().length > 0) {
+      const meetTempDir = path.join(tmpdir(), "paperclip-meet");
+      mkdirSync(meetTempDir, { recursive: true });
+      systemPromptFile = path.join(meetTempDir, `instructions-${agent.id}.md`);
+      writeFileSync(systemPromptFile, systemPromptContent, "utf-8");
+    }
+
+    const agentRuntimeConfig = asRecord(agent.runtimeConfig) ?? {};
+    const useBypass = Boolean(agentRuntimeConfig.bypassPermissions);
 
     const result = await openInteractiveSession({
       agentName: agent.name,
       skillsDir,
       instructionsDir,
-      initialPrompt,
+      agentSkillsDirs,
+      systemPromptFile,
+      initialPrompt: "Go",
       cwd: meetCwd,
+      permissionMode: useBypass ? "bypassPermissions" : "acceptEdits",
+      allowedTools: useBypass ? undefined : [
+        "WebSearch",
+        "WebFetch",
+        "Bash(npm *)",
+        "Bash(npx *)",
+        "Bash(yarn *)",
+        "Bash(pnpm *)",
+        "Bash(git *)",
+        "Bash(ls *)",
+        "Bash(mkdir *)",
+        "Bash(cat *)",
+        "Bash(node *)",
+        "Bash(python3 *)",
+        "Bash(curl *)",
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+      ],
     });
 
     if (!result.success) {

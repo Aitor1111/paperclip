@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { createRequire } from "node:module";
@@ -65,8 +67,9 @@ import {
 } from "./execution-workspace-policy.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
-import { resolvePaperclipSkillsDir } from "@paperclipai/adapter-utils/server-utils";
+import { readPaperclipSkillSyncPreference, resolvePaperclipSkillsDir } from "@paperclipai/adapter-utils/server-utils";
 import { openInteractiveSession } from "../utils/terminal-launcher.js";
+import { agentInstructionsService } from "./agent-instructions.js";
 import {
   hasSessionCompactionThresholds,
   resolveSessionCompactionPolicy,
@@ -3317,19 +3320,74 @@ export function heartbeatService(db: Db) {
         const adapterModuleDir = path.dirname(adapterServerEntry);
         const skillsDir = await resolvePaperclipSkillsDir(adapterModuleDir) ?? adapterModuleDir;
 
-        // Build a rich initial prompt with agent identity and task context
-        const meetPromptParts: string[] = [];
-        meetPromptParts.push(`You are ${agent.name} (${agent.role}), agent ID ${agent.id}.`);
-        meetPromptParts.push(`Company: ${agent.companyId}.`);
-        if (issueContext) {
-          meetPromptParts.push("");
-          meetPromptParts.push(`## Your current task`);
-          meetPromptParts.push(`**${issueContext.identifier ?? ""}: ${issueContext.title}**`);
-          meetPromptParts.push(`Status: ${issueContext.status} | Priority: ${issueContext.priority}`);
+        // Read agent instructions
+        const instructionsSvc = agentInstructionsService();
+        let agentInstructionsContent = "";
+        try {
+          const bundle = await instructionsSvc.getBundle(agent);
+          const entryFile = bundle?.entryFile ?? "AGENTS.md";
+          const entryPath = path.join(instructionsDir, entryFile);
+          const rawContent = readFileSync(entryPath, "utf-8");
+          if (rawContent.trim().length > 0) {
+            const pathDirective =
+              `\nThe above agent instructions were loaded from ${entryPath}. ` +
+              `Resolve any relative file references from ${instructionsDir}. ` +
+              `This base directory is authoritative for sibling instruction files such as ` +
+              `./HEARTBEAT.md, ./SOUL.md, and ./TOOLS.md; do not resolve those from the parent agent directory.`;
+            agentInstructionsContent = rawContent + pathDirective;
+          }
+        } catch {
+          // No instructions file found — continue without
         }
-        meetPromptParts.push("");
-        meetPromptParts.push("This is an interactive session. Collaborate with the user to complete the task.");
-        const initialPrompt = meetPromptParts.join("\n");
+
+        // Resolve agent-specific skills
+        const agentSkillsDirs: string[] = [];
+        try {
+          const agentConfig = (agent.adapterConfig ?? {}) as Record<string, unknown>;
+          const preference = readPaperclipSkillSyncPreference(agentConfig);
+          if (preference.explicit && preference.desiredSkills.length > 0) {
+            const runtimeEntries = await companySkills.listRuntimeSkillEntries(agent.companyId);
+            const desiredSet = new Set(preference.desiredSkills.map((s: string) => s.trim().toLowerCase()));
+            for (const entry of runtimeEntries) {
+              const keyMatch = desiredSet.has(entry.key.trim().toLowerCase());
+              const nameMatch = desiredSet.has(entry.runtimeName.trim().toLowerCase());
+              const slugMatch = desiredSet.has(entry.key.split("/").pop()?.trim().toLowerCase() ?? "");
+              if (keyMatch || nameMatch || slugMatch) {
+                agentSkillsDirs.push(entry.source);
+              }
+            }
+          }
+        } catch {
+          // Skill resolution failed — continue with Paperclip default skills only
+        }
+
+        // Build combined system prompt: instructions + identity + task context
+        const systemParts: string[] = [];
+        if (agentInstructionsContent) {
+          systemParts.push(agentInstructionsContent);
+        }
+        systemParts.push("");
+        systemParts.push(`## Session context`);
+        systemParts.push(`You are ${agent.name} (${agent.role}), agent ID ${agent.id}.`);
+        systemParts.push(`Company: ${agent.companyId}.`);
+        if (issueContext) {
+          systemParts.push("");
+          systemParts.push(`## Your current task`);
+          systemParts.push(`**${issueContext.identifier ?? ""}: ${issueContext.title}**`);
+          systemParts.push(`Status: ${issueContext.status} | Priority: ${issueContext.priority}`);
+        }
+        systemParts.push("");
+        systemParts.push("This is an interactive session. The user will send \"Go\" to start the session.");
+        systemParts.push("When you receive \"Go\": introduce yourself briefly (name and role), acknowledge the current task if one is assigned, and either ask a clarifying question or start working if the task is straightforward.");
+
+        let systemPromptFile: string | undefined;
+        const systemPromptContent = systemParts.join("\n");
+        if (systemPromptContent.trim().length > 0) {
+          const meetTempDir = path.join(tmpdir(), "paperclip-meet");
+          mkdirSync(meetTempDir, { recursive: true });
+          systemPromptFile = path.join(meetTempDir, `instructions-${agent.id}.md`);
+          writeFileSync(systemPromptFile, systemPromptContent, "utf-8");
+        }
 
         // Resolve cwd from project workspace if task has a project
         let meetCwd: string | undefined;
@@ -3352,7 +3410,9 @@ export function heartbeatService(db: Db) {
           agentName: agent.name,
           skillsDir,
           instructionsDir,
-          initialPrompt,
+          agentSkillsDirs,
+          systemPromptFile,
+          initialPrompt: "Go",
           cwd: meetCwd,
         });
 

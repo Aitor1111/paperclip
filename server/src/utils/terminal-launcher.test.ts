@@ -1,72 +1,74 @@
 import { describe, it, expect } from "vitest";
 import {
-  buildClaudeCommand,
+  buildClaudeArgs,
   buildOsascript,
   detectTerminal,
   openInteractiveSession,
   type LaunchOptions,
 } from "./terminal-launcher.js";
 
-describe("buildClaudeCommand", () => {
+describe("buildClaudeArgs", () => {
   const baseOpts: LaunchOptions = {
     agentName: "Alice",
     skillsDir: "/home/user/.paperclip/skills",
     instructionsDir: "/home/user/.paperclip/instructions",
   };
 
-  it("builds a basic command with required options", () => {
-    const { command } = buildClaudeCommand(baseOpts);
-    expect(command).toContain("claude");
-    expect(command).toContain('--add-dir "/home/user/.paperclip/skills"');
-    expect(command).toContain('--add-dir "/home/user/.paperclip/instructions"');
-    expect(command).toContain('--name "Meeting: Alice"');
+  it("builds args with required options", () => {
+    const args = buildClaudeArgs(baseOpts);
+    expect(args).toContain("--add-dir");
+    expect(args).toContain("/home/user/.paperclip/skills");
+    expect(args).toContain("/home/user/.paperclip/instructions");
+    expect(args).toContain("--name");
+    expect(args).toContain("Meeting: Alice");
   });
 
   it("includes --resume when sessionId is provided", () => {
-    const { command } = buildClaudeCommand({ ...baseOpts, sessionId: "sess-123" });
-    expect(command).toContain('--resume "sess-123"');
+    const args = buildClaudeArgs({ ...baseOpts, sessionId: "sess-123" });
+    expect(args).toContain("--resume");
+    expect(args).toContain("sess-123");
   });
 
   it("does not include --resume when sessionId is omitted", () => {
-    const { command } = buildClaudeCommand(baseOpts);
-    expect(command).not.toContain("--resume");
-  });
-
-  it("writes initial prompt to temp file", () => {
-    const { command, tempFile } = buildClaudeCommand({
-      ...baseOpts,
-      initialPrompt: "Hello, start working",
-    });
-    expect(tempFile).toBeDefined();
-    expect(command).toContain("$(cat '");
-  });
-
-  it("does not create temp file when no prompt", () => {
-    const { tempFile } = buildClaudeCommand(baseOpts);
-    expect(tempFile).toBeUndefined();
+    const args = buildClaudeArgs(baseOpts);
+    expect(args).not.toContain("--resume");
   });
 
   it("sanitizes quotes in agent names", () => {
-    const { command } = buildClaudeCommand({
+    const args = buildClaudeArgs({
       ...baseOpts,
       agentName: 'Bob "The Builder"',
     });
-    expect(command).toContain('--name "Meeting: Bob The Builder"');
+    expect(args).toContain("Meeting: Bob The Builder");
   });
 
-  it("handles multiline prompts with special chars via temp file", () => {
-    const { command, tempFile } = buildClaudeCommand({
+  it("includes --append-system-prompt-file when systemPromptFile is provided", () => {
+    const args = buildClaudeArgs({
       ...baseOpts,
-      initialPrompt: 'Line 1\nLine 2\n**bold** and "quotes"',
+      systemPromptFile: "/tmp/instructions.md",
     });
-    expect(tempFile).toBeDefined();
-    // Prompt is in a file, not inline in the command
-    expect(command).toContain("$(cat '");
+    expect(args).toContain("--append-system-prompt-file");
+    expect(args).toContain("/tmp/instructions.md");
+  });
+
+  it("includes agent skill dirs as --add-dir entries", () => {
+    const args = buildClaudeArgs({
+      ...baseOpts,
+      agentSkillsDirs: ["/tmp/skill-a", "/tmp/skill-b"],
+    });
+    const addDirIndices = args.reduce<number[]>((acc, val, idx) => {
+      if (val === "--add-dir") acc.push(idx);
+      return acc;
+    }, []);
+    // 2 base dirs + 2 agent skill dirs = 4 --add-dir entries
+    expect(addDirIndices).toHaveLength(4);
+    expect(args).toContain("/tmp/skill-a");
+    expect(args).toContain("/tmp/skill-b");
   });
 });
 
 describe("buildOsascript", () => {
-  const testCommand = 'claude --name "Meeting: Alice"';
+  const testCommand = "/tmp/launch-script.sh";
 
   it("generates valid AppleScript for iTerm2", () => {
     const script = buildOsascript(testCommand, "iterm2");
@@ -82,8 +84,7 @@ describe("buildOsascript", () => {
   });
 
   it("uses JSON.stringify for safe escaping", () => {
-    const script = buildOsascript('claude "hello world"', "terminal");
-    // JSON.stringify wraps in quotes and escapes internal quotes
+    const script = buildOsascript("/tmp/test script.sh", "terminal");
     expect(script).toContain("do script");
     expect(script).toBeDefined();
   });
