@@ -27,6 +27,7 @@ import {
   principalPermissionGrants,
   companyMemberships,
   companySkills,
+  labels,
 } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 
@@ -152,6 +153,19 @@ export function companyService(db: Db) {
     throw new Error("Unable to allocate unique issue prefix");
   }
 
+  const DEFAULT_LABELS = [
+    { name: "meet", color: "#10b981" },
+  ];
+
+  async function seedDefaultLabels(tx: Db, companyId: string) {
+    for (const lbl of DEFAULT_LABELS) {
+      await tx
+        .insert(labels)
+        .values({ companyId, name: lbl.name, color: lbl.color })
+        .onConflictDoNothing({ target: [labels.companyId, labels.name] });
+    }
+  }
+
   return {
     list: async () => {
       const rows = await getCompanyQuery(db);
@@ -170,6 +184,10 @@ export function companyService(db: Db) {
 
     create: async (data: typeof companies.$inferInsert) => {
       const created = await createCompanyWithUniquePrefix(data);
+
+      // Seed default labels for every new company
+      await seedDefaultLabels(db, created.id);
+
       const row = await getCompanyQuery(db)
         .where(eq(companies.id, created.id))
         .then((rows) => rows[0] ?? null);
@@ -316,5 +334,15 @@ export function companyService(db: Db) {
         }
         return result;
       }),
+
+    /** Ensure default labels exist for all companies (backfill). */
+    ensureDefaultLabels: async () => {
+      const allCompanies = await db
+        .select({ id: companies.id })
+        .from(companies);
+      for (const c of allCompanies) {
+        await seedDefaultLabels(db, c.id);
+      }
+    },
   };
 }

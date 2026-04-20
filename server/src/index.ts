@@ -30,6 +30,7 @@ import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import {
+  companyService,
   feedbackService,
   heartbeatService,
   instanceSettingsService,
@@ -589,6 +590,13 @@ export async function startServer(): Promise<StartedServer> {
     })
     .catch((err) => {
       logger.error({ err }, "startup reconciliation of persisted runtime services failed");
+    });
+
+  // Ensure every company has the default labels (e.g. "meet" for interactive sessions)
+  void companyService(db as any)
+    .ensureDefaultLabels()
+    .catch((err) => {
+      logger.error({ err }, "startup default labels backfill failed");
     });
   
   if (config.heartbeatSchedulerEnabled) {

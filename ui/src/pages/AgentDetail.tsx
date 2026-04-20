@@ -1662,6 +1662,25 @@ function ConfigurationTab({
     onSavingChange(isConfigSaving);
   }, [onSavingChange, isConfigSaving]);
 
+  const bypassPermissions = Boolean(
+    (agent.runtimeConfig as Record<string, unknown> | undefined)?.bypassPermissions,
+  );
+  const updateRuntimeConfig = useMutation({
+    mutationFn: (patch: Record<string, unknown>) =>
+      agentsApi.update(agent.id, { runtimeConfig: patch }, companyId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.urlKey) });
+      if (agent.companyId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(agent.companyId) });
+      }
+    },
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : "Failed to update runtime config";
+      pushToast({ title: "Save failed", body: message, tone: "error" });
+    },
+  });
+
   const canCreateAgents = Boolean(agent.permissions?.canCreateAgents);
   const canAssignTasks = Boolean(agent.access?.canAssignTasks);
   const taskAssignSource = agent.access?.taskAssignSource ?? "none";
@@ -1729,6 +1748,21 @@ function ConfigurationTab({
                 })
               }
               disabled={updatePermissions.isPending || taskAssignLocked}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 text-sm">
+            <div className="space-y-1">
+              <div>Bypass permissions in Meet sessions</div>
+              <p className="text-xs text-muted-foreground">
+                Gives full autonomy during interactive sessions. The agent will only ask when it has a question or needs review.
+              </p>
+            </div>
+            <ToggleSwitch
+              checked={bypassPermissions}
+              onCheckedChange={() =>
+                updateRuntimeConfig.mutate({ bypassPermissions: !bypassPermissions })
+              }
+              disabled={updateRuntimeConfig.isPending}
             />
           </div>
         </div>
