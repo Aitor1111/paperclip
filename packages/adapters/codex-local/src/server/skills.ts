@@ -6,36 +6,76 @@ import type {
   AdapterSkillSnapshot,
 } from "@paperclipai/adapter-utils";
 import {
+  readInstalledSkillTargets,
   readPaperclipRuntimeSkillEntries,
   resolvePaperclipDesiredSkillNames,
 } from "@paperclipai/adapter-utils/server-utils";
+import { resolveManagedCodexHomeDir } from "./codex-home.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
+function parseObject(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function resolveCodexSkillsHome(
+  ctx: AdapterSkillContext,
+): string {
+  const env = parseObject(ctx.config.env);
+  const configuredCodexHome =
+    typeof env.CODEX_HOME === "string" && env.CODEX_HOME.trim().length > 0
+      ? path.resolve(env.CODEX_HOME.trim())
+      : null;
+  return path.join(
+    configuredCodexHome ?? resolveManagedCodexHomeDir(process.env, ctx.companyId),
+    "skills",
+  );
+}
+
 async function buildCodexSkillSnapshot(
-  config: Record<string, unknown>,
+  ctx: AdapterSkillContext,
 ): Promise<AdapterSkillSnapshot> {
+  const config = ctx.config;
   const availableEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const availableByKey = new Map(availableEntries.map((entry) => [entry.key, entry]));
   const desiredSkills = resolvePaperclipDesiredSkillNames(config, availableEntries);
   const desiredSet = new Set(desiredSkills);
-  const entries: AdapterSkillEntry[] = availableEntries.map((entry) => ({
-    key: entry.key,
-    runtimeName: entry.runtimeName,
-    desired: desiredSet.has(entry.key),
-    managed: true,
-    state: desiredSet.has(entry.key) ? "configured" : "available",
-    origin: entry.required ? "paperclip_required" : "company_managed",
-    originLabel: entry.required ? "Required by Paperclip" : "Managed by Paperclip",
-    readOnly: false,
-    sourcePath: entry.source,
-    targetPath: null,
-    detail: desiredSet.has(entry.key)
-      ? "Will be linked into the effective CODEX_HOME/skills/ directory on the next run."
-      : null,
-    required: Boolean(entry.required),
-    requiredReason: entry.requiredReason ?? null,
-  }));
+  const skillsHome = resolveCodexSkillsHome(ctx);
+  const installed = await readInstalledSkillTargets(skillsHome);
+  const entries: AdapterSkillEntry[] = availableEntries.map((entry) => {
+    const desired = desiredSet.has(entry.key);
+    const installedEntry = installed.get(entry.runtimeName) ?? null;
+    const targetPath = path.join(skillsHome, entry.runtimeName);
+    const isManagedLink = installedEntry?.targetPath === entry.source;
+    const state = isManagedLink
+      ? desired ? "installed" : "stale"
+      : installedEntry ? "external" : desired ? "configured" : "available";
+    const detail = isManagedLink
+      ? "Linked into the effective CODEX_HOME/skills/ directory."
+      : installedEntry
+        ? "A non-Paperclip skill already exists at this CODEX_HOME/skills/ name."
+        : desired
+          ? "Will be linked into the effective CODEX_HOME/skills/ directory on the next run."
+          : null;
+
+    return {
+      key: entry.key,
+      runtimeName: entry.runtimeName,
+      desired,
+      managed: isManagedLink || !installedEntry,
+      state,
+      origin: entry.required ? "paperclip_required" : "company_managed",
+      originLabel: entry.required ? "Required by Paperclip" : "Managed by Paperclip",
+      readOnly: false,
+      sourcePath: entry.source,
+      targetPath,
+      detail,
+      required: Boolean(entry.required),
+      requiredReason: entry.requiredReason ?? null,
+    };
+  });
   const warnings: string[] = [];
 
   for (const desiredSkill of desiredSkills) {
@@ -69,14 +109,14 @@ async function buildCodexSkillSnapshot(
 }
 
 export async function listCodexSkills(ctx: AdapterSkillContext): Promise<AdapterSkillSnapshot> {
-  return buildCodexSkillSnapshot(ctx.config);
+  return buildCodexSkillSnapshot(ctx);
 }
 
 export async function syncCodexSkills(
   ctx: AdapterSkillContext,
   _desiredSkills: string[],
 ): Promise<AdapterSkillSnapshot> {
-  return buildCodexSkillSnapshot(ctx.config);
+  return buildCodexSkillSnapshot(ctx);
 }
 
 export function resolveCodexDesiredSkillNames(

@@ -72,6 +72,39 @@ describe("codex local skill sync", () => {
     });
   });
 
+  it("reports Codex skills as installed after runtime injection has linked them", async () => {
+    const codexHome = await makeTempDir("paperclip-codex-skill-installed-");
+    cleanupDirs.add(codexHome);
+
+    const ctx = {
+      agentId: "agent-2",
+      companyId: "company-1",
+      adapterType: "codex_local",
+      config: {
+        env: {
+          CODEX_HOME: codexHome,
+        },
+        paperclipSkillSync: {
+          desiredSkills: [paperclipKey],
+        },
+      },
+    } as const;
+
+    const before = await listCodexSkills(ctx);
+    const paperclipEntry = before.entries.find((entry) => entry.key === paperclipKey);
+    expect(paperclipEntry?.state).toBe("configured");
+    expect(paperclipEntry?.sourcePath).toBeTruthy();
+
+    await fs.mkdir(path.join(codexHome, "skills"), { recursive: true });
+    await fs.symlink(paperclipEntry!.sourcePath!, path.join(codexHome, "skills", "paperclip"));
+
+    const after = await listCodexSkills(ctx);
+    const installedEntry = after.entries.find((entry) => entry.key === paperclipKey);
+    expect(installedEntry?.state).toBe("installed");
+    expect(installedEntry?.targetPath).toBe(path.join(codexHome, "skills", "paperclip"));
+    expect(installedEntry?.detail).toContain("Linked into the effective CODEX_HOME/skills/");
+  });
+
   it("keeps required bundled Paperclip skills configured even when the desired set is emptied", async () => {
     const codexHome = await makeTempDir("paperclip-codex-skill-required-");
     cleanupDirs.add(codexHome);

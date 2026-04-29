@@ -27,7 +27,8 @@ export function companySkillRoutes(db: Db) {
   const access = accessService(db);
   const svc = companySkillService(db);
 
-  function canCreateAgents(agent: { permissions: Record<string, unknown> | null | undefined }) {
+  function canCreateAgents(agent: { role?: string | null; permissions: Record<string, unknown> | null | undefined }) {
+    if (agent.role === "ceo") return true;
     if (!agent.permissions || typeof agent.permissions !== "object") return false;
     return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
   }
