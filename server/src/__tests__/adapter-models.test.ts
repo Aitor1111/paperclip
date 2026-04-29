@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { models as codexFallbackModels } from "@paperclipai/adapter-codex-local";
 import { models as cursorFallbackModels } from "@paperclipai/adapter-cursor-local";
 import { models as opencodeFallbackModels } from "@paperclipai/adapter-opencode-local";
@@ -11,6 +14,8 @@ describe("adapter model listing", () => {
   beforeEach(() => {
     delete process.env.OPENAI_API_KEY;
     delete process.env.PAPERCLIP_OPENCODE_COMMAND;
+    delete process.env.PAPERCLIP_HOME;
+    delete process.env.PAPERCLIP_INSTANCE_ID;
     resetCodexModelsCacheForTests();
     resetCursorModelsCacheForTests();
     setCursorModelsRunnerForTests(null);
@@ -29,6 +34,32 @@ describe("adapter model listing", () => {
 
     expect(models).toEqual(codexFallbackModels);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("loads codex models from the company Codex CLI cache without an OpenAI key", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-codex-models-"));
+    process.env.PAPERCLIP_HOME = home;
+    process.env.PAPERCLIP_INSTANCE_ID = "test";
+    const companyId = "company-1";
+    const cacheDir = path.join(home, "instances", "test", "companies", companyId, "codex-home");
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheDir, "models_cache.json"),
+      JSON.stringify({
+        models: [
+          { slug: "gpt-5.5", display_name: "GPT-5.5", visibility: "list" },
+          { slug: "gpt-5.4", display_name: "GPT-5.4", visibility: "list" },
+        ],
+      }),
+      "utf8",
+    );
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const models = await listAdapterModels("codex_local", { companyId });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(models[0]).toEqual({ id: "gpt-5.5", label: "GPT-5.5" });
+    expect(models.some((model) => model.id === "gpt-5.3-codex")).toBe(true);
   });
 
   it("loads codex models dynamically and merges fallback options", async () => {
