@@ -199,3 +199,68 @@ PR #2218 (`feat/external-adapter-phase1`) adds external adapter support. See roo
 - `createServerAdapter()` must include ALL optional fields (especially `detectModel`)
 - Built-in UI adapters can shadow external plugin parsers — remove built-in when fully externalizing
 - Reference external adapters: Hermes (`@henkey/hermes-paperclip-adapter` or `file:`) and Droid (npm)
+
+
+<claude-mem-context>
+# Memory Context
+
+# [paperclip] recent context, 2026-04-29 9:56am GMT+8
+
+Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
+Format: ID TIME TYPE TITLE
+Fetch details: get_observations([IDs]) | Search: mem-search skill
+
+Stats: 43 obs (17,796t read) | 616,575t work | 97% savings
+
+### Apr 20, 2026
+264 9:39a 🔵 Agent Launch & Interactive Task Creation — Feature Only Present in Avocats and Icona Projects
+268 9:44a 🔵 Project Configuration Centralized at Global Level — Not Project-Specific
+269 9:50a 🔵 Agent Launch & Interactive Task Creation — Feature Gap in New Projects
+270 " 🔵 Project-Level settings.local.json Files Are Manually Accumulated — No Global Config Exists
+272 9:51a 🔵 Paperclip Project .claude Directory — Skills Present via Symlinks, No CLAUDE.md, No Agent Config
+275 " 🔵 Paperclip IS the Agent/Task Platform — Feature Gap Exists in the Platform Source Itself
+276 9:52a 🔵 Agent Launch & Interactive Task Creation — Feature Gap in New Projects
+277 9:54a 🟣 Interactive Session (Meet Label) Automatically Seeded for All New Companies
+279 9:55a 🟣 Default Labels Backfill Runs at Server Startup for All Companies
+280 9:57a 🔵 Paperclip "Meet" Label — External Company Creation Skips Seeding
+293 10:11a 🔵 Social Presence Agent — "Meet" Option Missing from Agent UI
+303 10:45a 🔵 Paperclip "Meet" Button & Interactive Task Mode — Still Missing After Restart
+316 11:05a 🔵 paperclip UI — AgentDetail.tsx "Meet" Button Uses meetMutation, Defined Only in AgentDetail.tsx
+317 11:06a 🔵 paperclip UI — App.tsx Routing Structure: Two Route Trees for Prefixed and Unprefixed Agent URLs
+318 11:07a 🔵 paperclip UI — meetMutation Calls agentsApi.meet(agentLookupRef, undefined, resolvedCompanyId)
+319 " 🔵 paperclip — agentsApi.meet POSTs to agentPath(id, companyId, "/meet") — companyId Required for Correct URL
+320 " 🔵 paperclip — AgentDetail resolvedCompanyId Returns null When companyPrefix Is Missing from URL Params
+326 11:08a 🔵 paperclip AgentDetail — resolvedCompanyId Comes from Fetched Agent Data, Not URL Param
+327 " 🔵 paperclip AgentDetail — Meet Button Has No Role/Permission Guard; Only Disabled During Pending State
+328 11:09a 🔵 paperclip — meetMutation onSuccess Shows Toast Only; No Navigation or Session Window Opened in UI
+329 " 🔵 paperclip Layout — hasUnknownCompanyPrefix Flag Could Block Agent Page Rendering for Unrecognized Org Prefix
+330 11:10a 🔵 paperclip Layout — Root Cause Found: hasUnknownCompanyPrefix Renders NotFoundPage Instead of AgentDetail
+331 " 🔵 paperclip — Subagent Audit Confirms Meet Button Code Is Unconditional; Issue Is Runtime/Browser Rendering
+332 11:11a 🔵 paperclip Server — Static UI Served from server/ui-dist/ First, then ../../ui/dist — Stale Build May Explain Missing Meet Button
+333 " 🔵 paperclip Server — server/ui-dist/ Confirmed Absent; Static Mode Falls Through to ../../ui/dist (Monorepo ui/dist)
+334 " 🔵 paperclip Server — Dev Mode Uses tsx src/index.ts; Both Dev and Production Resolve Static UI to ui/dist
+337 11:14a 🔵 paperclip — Compiled Bundle Confirmed to Contain Meet Button — Stale Build Theory Definitively Ruled Out
+358 11:26a 🔵 Paperclip Monorepo Root Package Scripts
+359 " 🔵 Server and UI Package Build Lifecycles
+360 " 🔵 Paperclip 7-Step Release Pipeline (release.sh)
+S58 Paperclip CLI Opens on localhost:3101 (Apr 20 at 11:26 AM)
+S56 Server and UI Package Build Lifecycles (Apr 20 at 11:26 AM)
+376 11:31a 🔵 Paperclip CLI Opens on localhost:3101
+S715 Fix Paperclip codex_local agents defaulting to GPT-5.3-codex instead of GPT-5.5, and enable GPT-5.5 selection in UI (Apr 20 at 11:31 AM)
+### Apr 29, 2026
+1534 9:29a 🔵 Paperclip Codex adapter model display: GPT-5.3/Codex label normalization logic identified
+1535 9:30a 🔵 Root cause found: DEFAULT_CODEX_LOCAL_MODEL hardcoded to "gpt-5.3-codex", GPT-5.5 absent from fallback models list
+S716 Fix Paperclip codex_local agents defaulting to GPT-5.3-codex instead of GPT-5.5, and enable GPT-5.5 selection in the UI — then reverted by primary session (Apr 29 at 9:35 AM)
+1540 9:36a 🔵 Investigation Target Corrected: Mobile Studio, Not Paperclip
+1543 9:37a 🔵 DB Connection Confirmed: paperclip:paperclip Works, companies Table Has No short_name Column
+1544 " 🔵 Paperclip DB: All Companies Queried — Mobile Studio Confirmed with ID and Full Schema
+1541 9:43a 🔵 Paperclip Embedded PostgreSQL Authentication: Correct Credentials Are paperclip:paperclip
+1542 " 🔵 opencode-local Adapter Exists Alongside codex-local in Paperclip
+1545 9:50a 🔵 Root Cause Found: All Mobile Studio Agents Have gpt-5.3-codex Hardcoded in DB adapter_config
+1546 9:53a 🔵 Paperclip Fork Architecture: Terminal Agent Mode + Project Docs Added as Custom Features
+1547 " 🔵 Fork Git State: feat/interactive-sessions Branch, upstream Remote Already Configured
+1548 9:54a 🔵 heartbeat_runs context_snapshot Has No adapter_meta or adapter_config — No Execution-Time Model Audit Trail
+1549 9:55a 🔵 cost_events Confirms gpt-5.3-codex Was Actually Executed; Codex CLI Receives --model Flag Directly
+
+Access 617k tokens of past work via get_observations([IDs]) or mem-search skill.
+</claude-mem-context>
